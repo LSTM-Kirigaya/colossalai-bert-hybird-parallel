@@ -4,7 +4,7 @@ from torch.cuda import max_memory_allocated, reset_peak_memory_stats
 from torch.distributed import get_rank
 
 
-def init_w_col(builder):
+def init_w_col(builder, args=None):
     import colossalai
     from colossalai.core import global_context as gpc
     from colossalai.nn.optimizer import CPUAdam
@@ -18,7 +18,7 @@ def init_w_col(builder):
     build_data, build_model, build_loss, optimizer_class, build_scheduler = builder()
 
     print_log('Building data')
-    train_data, test_data = build_data()
+    train_data, test_data = build_data(args)
 
     use_zero = "zero" in gpc.config
     if use_zero:

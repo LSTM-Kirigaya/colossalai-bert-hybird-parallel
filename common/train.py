@@ -23,7 +23,7 @@ def _train(epoch, rank, world_size, train_dataloader, model, criterion, optimize
     num_steps = len(train_dataloader)
     if 'steps_per_epoch' in CONFIG['hyperparameter'] and CONFIG['hyperparameter']['steps_per_epoch'] < num_steps:
         num_steps = CONFIG['hyperparameter']['steps_per_epoch']
-    progress = range(num_steps)
+    progress = train_dataloader
 
     if rank == 0:
         progress = tqdm(progress, desc=f"[Epoch {epoch} / Train]")
@@ -34,20 +34,17 @@ def _train(epoch, rank, world_size, train_dataloader, model, criterion, optimize
     num_samples = torch.zeros(()).to(torch.int).to(rank)
     num_tokens = torch.zeros(()).to(torch.int).to(rank)
 
-    data_iter = iter(train_dataloader)
-
     if mem_monitor is not None:
         mem_monitor.start()
 
-    for _ in progress:
+    
+    for batch in progress:
+        batch["labels"] = batch["labels"] - torch.min(batch["labels"])
         fwd_start = time.time()
-
         optimizer.zero_grad()
 
         if use_colossalai_zero_v1:
             model.zero_grad(set_to_none=True)
-
-        batch = next(data_iter)
 
         labels = batch.pop('labels')
         batch_size = None

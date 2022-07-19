@@ -19,17 +19,17 @@ pip install -r requirement.txt
 export PYTHONPATH=$(dirname "$PWD"):$PYTHONPATH
 ```
 
+
+
 ## Bert Usage
 
-1. Prepare datasets and tokenizers from HuggingFace Hub if necessary (e.g. we provide an example of training `wikitext-2`).
+1. Prepare datasets and tokenizers from HuggingFace Hub if necessary (e.g. we provide an example of training `wikitext-2`). You can make a symbolic link like `ln -s ../huggingface pretrain_data`
+
 
 2. Run benchmark with one of the systems to evaluate
-```
-DATA=/PATH/TO/DATASET TOKENIZER=/PATH/TO/TOKENIZER LOG=/PATH/TO/LOG torchrun --nproc_per_node=NUM_GPUS run.py --config=CONFIG_FILE
-```
-
-Here, <CONFIG_FILE> is a json. A possible command is as follow:
 
 ```bash
-DATA=huggingface/datasets/wikitext/wikitext-2 TOKENIZER=huggingface/tokenizers/bert/bert-base-cased LOG=log torchrun --nproc_per_node=4 run.py --config=colossalai_utils/bert_config_zero.json
+bash scripts/run_pretrain.sh
 ```
+
+> Change config json in launch scripts

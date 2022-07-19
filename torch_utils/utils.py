@@ -6,7 +6,7 @@ from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 
-def init_w_torch(builder):
+def init_w_torch(builder, args=None):
     rank = int(os.environ['RANK'])
     world_size = int(os.environ['WORLD_SIZE'])
     host = os.environ['MASTER_ADDR']

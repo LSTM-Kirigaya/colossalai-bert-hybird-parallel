@@ -1,17 +1,13 @@
 
-BERT_CONFIG_PATH='./configs/bert_base.json'
+BERT_CONFIG_PATH='./colossalai_utils/bert_config_tp2p5d.json'
 PY_FILE_PATH='./pretraining/run_pretraining.py'
 DATA_PATH='./pretrain_data/phase1/unbinned/parquet'
 VOCAB_FILE='bert-base-uncased'
 
 export PYTHONPATH=$PWD
 
-colossalai run --nproc_per_node 2 \
-    --master_port 29550 \
+torchrun --nproc_per_node 8 \
     $PY_FILE_PATH \
-    --bert-config $BERT_CONFIG_PATH \
-    --lr 1e-4 \
-    --data $DATA_PATH \
-    --vocab-file $VOCAB_FILE \
-    --batch-size 32 \
-    --epoch 100
+    --config $BERT_CONFIG_PATH \
+    --vocab_file $VOCAB_FILE \
+    --data $DATA_PATH

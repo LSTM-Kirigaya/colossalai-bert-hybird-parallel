@@ -750,7 +750,7 @@ class ColoBertForMaskedLM(BertPreTrainedModel):
         inputs_embeds=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
-        labels=None,
+        next_sentence_labels=None,
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,

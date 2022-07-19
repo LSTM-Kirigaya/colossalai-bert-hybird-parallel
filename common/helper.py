@@ -1,11 +1,16 @@
 import os
+from common.processors import PROCESSORS
 
 import torch
 from torch.distributed import get_world_size
 from transformers import BertConfig, BertTokenizer
+from colossalai.logging import get_dist_logger
+from colossalai.core import global_context as gpc
+from colossalai.context import ParallelMode
 
 from common.utils import CONFIG, ModelFromHF, get_model_size
 from colossalai_utils.model_zoo.colo_bert import ColoBertMaskedLMLoss, ColoBertForMaskedLM, create_colo_bert_pipeline_model
+from pretraining.pretrain_utils import get_dataloader_for_pretraining
 
 _bert_base = dict(
     seq_length=512,
@@ -42,75 +47,27 @@ _default_hyperparameters = dict(
 )
 
 
-def build_data():
-    import random
-    from functools import partial
-    from itertools import chain
+def build_data(args):
+    # tokenizer = BertTokenizer.from_pretrained(args.vocab_file,
+    #                                         do_lower_case=args.do_lower_case,
+    #                                         max_len=512)
+    # logger = get_dist_logger()
+    # processor = PROCESSORS[args.task_name]()
 
-    import numpy as np
-    from datasets import load_from_disk
-    from datasets import logging
-    from torch.utils.data import DataLoader, DistributedSampler
-    from transformers import DataCollatorForLanguageModeling
+    # train_data = get_train_dataloader(args, processor, logger)
+    # test_data = get_eval_dataloader(args, tokenizer, processor, logger)
+    dataloader = get_dataloader_for_pretraining(
+        root=args.data,                         # ./pretrain_data/phase1/unbinned/parquet
+        local_rank=gpc.get_local_rank(ParallelMode.DATA),
+        vocab_file=args.vocab_file,             # bert-base-uncased
+        global_batch_size=CONFIG['hyperparameter']['batch_size'],      # 32
+    )
 
-    world_size = get_world_size()
-    logging.disable_progress_bar()
-    dataset = load_from_disk(CONFIG['dataset'])
-    tokenizer = BertTokenizer(vocab_file=CONFIG['tokenizer'] + '/vocab.txt')
-
-    def tokenize(examples, mode='concat'):
-        assert mode in ['concat', 'pad']
-        seq_len = CONFIG['model']['seq_length']
-        if mode == 'concat':
-            examples = tokenizer(examples['text'])
-            concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-            total_length = len(concatenated_examples[list(examples.keys())[0]])
-            if total_length >= seq_len:
-                total_length = (total_length // seq_len) * seq_len
-
-            result = {
-                k: [t[i:i + seq_len] for i in range(0, total_length, seq_len)
-                   ] for k, t in concatenated_examples.items()
-            }
-        else:
-            tokenizer.pad_token = tokenizer.unk_token
-            result = tokenizer(examples, padding=True, truncation=True, max_length=seq_len, return_tensors='pt')
-
-        return result
-
-    tokenized_dataset = dataset.map(partial(tokenize, mode=CONFIG['hyperparameter']['tokenize_mode']),
-                                    batched=True,
-                                    num_proc=16,
-                                    load_from_cache_file=False,
-                                    keep_in_memory=True,
-                                    remove_columns='text')
-
-    def seed_worker(_):
-        worker_seed = 1024
-        np.random.seed(worker_seed)
-        torch.manual_seed(worker_seed)
-        random.seed(worker_seed)
-
-    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=True, mlm_probability=0.15)
-    train_sampler = DistributedSampler(tokenized_dataset['train'], shuffle=True) if world_size > 1 else None
-    train_data = DataLoader(tokenized_dataset['train'],
-                            shuffle=(train_sampler is None),
-                            sampler=train_sampler,
-                            drop_last=True,
-                            collate_fn=data_collator,
-                            worker_init_fn=seed_worker,
-                            batch_size=CONFIG['hyperparameter']['batch_size'],
-                            pin_memory=True)
-    test_sampler = DistributedSampler(tokenized_dataset['validation'], shuffle=False) if world_size > 1 else None
-    test_data = DataLoader(tokenized_dataset['validation'],
-                           sampler=test_sampler,
-                           drop_last=True,
-                           collate_fn=data_collator,
-                           worker_init_fn=seed_worker,
-                           batch_size=CONFIG['hyperparameter']['batch_size'],
-                           pin_memory=True)
-
-    return train_data, test_data
+    if args.pretrained:
+        return dataloader, None
+    else:
+        # TODO : train set and test set, but I still don't know GLUE_DATASET MRPC looks like
+        ...
 
 
 def build_model():
@@ -174,8 +131,6 @@ def bert_builder():
     else:
         CONFIG['hyperparameter'] = _default_hyperparameters
 
-    CONFIG['dataset'] = os.environ['DATA']
-    CONFIG['tokenizer'] = os.environ['TOKENIZER']
     if 'numel' not in CONFIG['model']:
         CONFIG['model']['numel'] = get_model_size(build_model())
 

@@ -6,15 +6,26 @@ from concurrent.futures import ThreadPoolExecutor
 
 import torch
 from torch.distributed import get_rank, is_initialized
+from torch.utils.data import SequentialSampler, DataLoader
+from colossalai.utils import get_dataloader
+
+from common.data import get_train_features, gen_tensor_dataset, convert_examples_to_features
 
 CONFIG = dict()
-
 
 def load_config():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str)
-    args = parser.parse_args()
+    parser.add_argument('--data', default=None, type=str)
+    parser.add_argument('--do_lower_case', action='store_true', help="Set this flag if you are using an uncased model.")
+    parser.add_argument('--vocab_file',
+                       type=str,
+                       default=None,
+                       required=True,
+                       help="Vocabulary mapping/file BERT was pretrainined on")
+    
 
+    args = parser.parse_args()
     config_file = args.config
 
     assert os.path.exists(config_file), 'No valid config file found.'
@@ -23,6 +34,8 @@ def load_config():
         cfg = json.load(f)
         for k, v in cfg.items():
             CONFIG[k] = v
+    
+    return args
 
 
 class AsyncMemoryMonitor:
@@ -109,3 +122,48 @@ def get_model_size(model: torch.nn.Module):
 
 def get_gpu_memory_mb():
     return torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1024**2
+
+def get_eval_dataloader(args, tokenizer, processor, logger):
+    # get eval dataset
+    eval_examples = processor.get_dev_examples(args.data_dir)
+    eval_features, label_map = convert_examples_to_features(
+        eval_examples,
+        processor.get_labels(),
+        args.max_seq_length,
+        tokenizer,
+    )
+
+    logger.info(f"Num examples = {len(eval_examples)}", ranks=[0])
+    eval_data = gen_tensor_dataset(eval_features)
+
+    # Run prediction for full data
+    eval_sampler = SequentialSampler(eval_data)
+    eval_dataloader = DataLoader(
+        eval_data,
+        sampler=eval_sampler,
+        batch_size=args.eval_batch_size,
+    )
+    return eval_dataloader, eval_examples, label_map
+
+
+def get_train_dataloader(args, tokenizer, processor, logger):
+    # build dataset
+    train_features = get_train_features(
+        args.data_dir,
+        args.vocab_file,
+        args.max_seq_length,
+        args.do_lower_case,
+        tokenizer,
+        processor,
+    )
+
+    # build dataloader
+    train_data = gen_tensor_dataset(train_features)
+    train_dataloader = get_dataloader(dataset=train_data,
+                                      shuffle=True,
+                                      add_sampler=True,
+                                      batch_size=args.train_batch_size)
+
+    logger.info(f"Num examples = {len(train_features)}", ranks=[0])
+
+    return train_dataloader
