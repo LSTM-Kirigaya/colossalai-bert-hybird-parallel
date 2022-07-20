@@ -24,3 +24,5 @@ LDDL - 2022-07-19 17:57:41,656 - parquet_dataset.py:53:__init__ - node-0 - WARNI
 LDDL - 2022-07-19 17:58:45,920 - parquet_dataset.py:53:__init__ - node-0 - WARNING : lost 638/177290878=0.00035986059023296167% samples in total
 LDDL - 2022-07-19 17:59:48,680 - parquet_dataset.py:53:__init__ - node-0 - WARNING : lost 638/177290878=0.00035986059023296167% samples in total
 LDDL - 2022-07-19 18:02:36,414 - parquet_dataset.py:53:__init__ - node-0 - WARNING : lost 638/177290878=0.00035986059023296167% samples in total
+LDDL - 2022-07-20 10:02:23,705 - parquet_dataset.py:53:__init__ - node-0 - WARNING : lost 638/177290878=0.00035986059023296167% samples in total
+LDDL - 2022-07-20 10:03:08,467 - parquet_dataset.py:53:__init__ - node-0 - WARNING : lost 638/177290878=0.00035986059023296167% samples in total

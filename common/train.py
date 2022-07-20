@@ -39,7 +39,8 @@ def _train(epoch, rank, world_size, train_dataloader, model, criterion, optimize
 
     
     for batch in progress:
-        batch["labels"] = batch["labels"] - torch.min(batch["labels"])
+        # TODO : ensure no label is negative, more elegant technique ???
+        batch["labels"][batch['labels'] < 0] = 0 
         fwd_start = time.time()
         optimizer.zero_grad()
 
