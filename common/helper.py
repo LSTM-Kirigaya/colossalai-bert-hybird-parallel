@@ -80,11 +80,7 @@ def build_model():
                           max_position_embeddings=model_cfg['seq_length'],
                           use_cache=not CONFIG['model'].get('checkpoint', False))
 
-    use_pipeline = 'parallel' in CONFIG and 'pipeline' in CONFIG['parallel'] and int(CONFIG['parallel']['pipeline']) > 1
-    if use_pipeline:
-        model = create_colo_bert_pipeline_model(bert_cfg)
-    else:
-        model = ModelFromHF(bert_cfg, ColoBertForMaskedLM)
+    model = ModelFromHF(bert_cfg, ColoBertForMaskedLM)
 
     return model
 
@@ -107,12 +103,7 @@ def build_scheduler(epoch_steps, optimizer):
     max_steps = epoch_steps * CONFIG['hyperparameter']['num_epochs']
     warmup_steps = epoch_steps * CONFIG['hyperparameter']['warmup_epochs']
 
-    if CONFIG['method'] == 'colossalai':
-        lr_scheduler = LinearWarmupLR(optimizer, total_steps=max_steps, warmup_steps=warmup_steps)
-    else:
-        lr_scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                       num_warmup_steps=warmup_steps,
-                                                       num_training_steps=max_steps)
+    lr_scheduler = LinearWarmupLR(optimizer, total_steps=max_steps, warmup_steps=warmup_steps)
 
     return lr_scheduler
 

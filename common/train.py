@@ -8,15 +8,9 @@ from tqdm import tqdm
 from common.utils import CONFIG, AsyncMemoryMonitor, print_log, get_tflops
 
 
-def _train(epoch, rank, world_size, train_dataloader, model, criterion, optimizer, lr_scheduler, scaler, mem_monitor):
-    use_optimizer_backward = CONFIG['method'] in ['colossalai']
-    use_integrated_backward = CONFIG['method'] in ['deepspeed', 'patrickstar']
-    use_integrated_step = CONFIG['method'] in ['deepspeed']
-    use_autocast = CONFIG['method'] in ['torch', 'colossalai'] and \
-        'fp16' in CONFIG and CONFIG['fp16'].get('enabled', True)
+def _train(epoch, rank, world_size, train_dataloader, model, criterion, optimizer, lr_scheduler, scaler):
+    use_autocast = 'fp16' in CONFIG and CONFIG['fp16'].get('enabled', True)
     clip_grad_norm = CONFIG.get('gradient_clipping', 0.)
-    use_integrated_clip_grad = CONFIG['method'] in ['fairscale']
-    use_colossalai_zero_v1 = CONFIG['method'] == 'colossalai' and CONFIG.get('sharded_model_version', 2) == 1
 
     model.train()
 
@@ -34,18 +28,9 @@ def _train(epoch, rank, world_size, train_dataloader, model, criterion, optimize
     num_samples = torch.zeros(()).to(torch.int).to(rank)
     num_tokens = torch.zeros(()).to(torch.int).to(rank)
 
-    if mem_monitor is not None:
-        mem_monitor.start()
-
-    
     for batch in progress:
-        # TODO : ensure no label is negative, more elegant technique ???
-        batch["labels"][batch['labels'] < 0] = 0 
         fwd_start = time.time()
         optimizer.zero_grad()
-
-        if use_colossalai_zero_v1:
-            model.zero_grad(set_to_none=True)
 
         labels = batch.pop('labels')
         batch_size = None
@@ -101,10 +86,6 @@ def _train(epoch, rank, world_size, train_dataloader, model, criterion, optimize
                                  throughput=batch_size * world_size / (batch_time + 1e-12),
                                  tflops=get_tflops(batch_time, batch_tokens * world_size))
 
-    peak_mem = None
-    if mem_monitor is not None:
-        peak_mem = max(mem_monitor.finish())
-
     all_reduce(train_loss)
     all_reduce(num_samples)
     all_reduce(num_tokens)
@@ -112,14 +93,11 @@ def _train(epoch, rank, world_size, train_dataloader, model, criterion, optimize
     msg = f'[Epoch {epoch} / Train]: Loss = {train_loss.item() / (world_size * num_steps):.3f}'
     msg += f' | Throughput = {num_samples.item() / (used_time + 1e-12):.3f} samples/sec'
     msg += f' | TFLOPS = {get_tflops(used_time, num_tokens.item()):.3f}'
-    if peak_mem is not None:
-        msg += f' | Peak memory = {peak_mem / 1024:.3f} GB.'
     print_log(msg)
 
 
 def _test(epoch, rank, world_size, test_dataloader, model, criterion, mem_monitor):
-    use_autocast = CONFIG['method'] in ['torch', 'colossalai'] and \
-        'fp16' in CONFIG and CONFIG['fp16'].get('enabled', True)
+    use_autocast = 'fp16' in CONFIG and CONFIG['fp16'].get('enabled', True)
     evaluation = CONFIG['model']['evaluation']
 
     model.eval()
@@ -188,100 +166,30 @@ def _test(epoch, rank, world_size, test_dataloader, model, criterion, mem_monito
                 metrics = dict(loss=loss.item(),
                                step_time=batch_time,
                                throughput=batch_size * world_size / (batch_time + 1e-12),
+                               ppl=math.exp(loss.item(),
                                tflops=get_tflops(batch_time, batch_tokens * world_size))
-                if evaluation == 'ppl':
-                    metrics['perplexity'] = math.exp(loss.item())
-                elif evaluation == 'acc':
-                    if not isinstance(labels, torch.Tensor):
-                        labels = labels['targets_a']
-                    batch_correct = torch.sum(labels == torch.argmax(outputs, dim=-1)).item()
-                    metrics['accuracy'] = batch_correct / batch_size
-                    correct += batch_correct
-                else:
-                    raise ValueError(f'Invalid evaluation method {evaluation}')
                 progress.set_postfix(**metrics)
-
-    peak_mem = None
-    if mem_monitor is not None:
-        peak_mem = max(mem_monitor.finish())
 
     all_reduce(test_loss)
     reduced_loss = test_loss.item() / (world_size * num_steps)
     all_reduce(num_samples)
     all_reduce(num_tokens)
-    if evaluation == 'acc':
-        all_reduce(correct)
 
     msg = f'[Epoch {epoch} / Test]: Loss = {reduced_loss:.3f}'
-    if evaluation == 'ppl':
-        msg += f' | Perplexity = {math.exp(reduced_loss):.3f}'
-    else:
-        msg += f' | Accuracy = {correct.item() * 100 / num_samples.item():.3f} %'
+    msg += f' | Perplexity = {math.exp(reduced_loss):.3f}'
     msg += f' | Throughput = {num_samples.item() / (used_time + 1e-12):.3f} samples/sec'
     msg += f' | TFLOPS = {get_tflops(used_time, num_tokens.item()):.3f}'
-    if peak_mem is not None:
-        msg += f' | Peak memory = {peak_mem / 1024:.3f} GB.'
     print_log(msg)
 
 
 def train(model, train_data, test_data, criterion, optimizer, scaler, lr_scheduler):
-    use_pipeline = 'parallel' in CONFIG and 'pipeline' in CONFIG['parallel'] and int(CONFIG['parallel']['pipeline']) > 1
-
     rank = get_rank()
     world_size = get_world_size()
 
-    mem_monitor = None
-    if CONFIG.get('use_mem_monitor'):
-        mem_monitor = AsyncMemoryMonitor(rank)
-
-    numel = CONFIG['model']['numel']
-    if numel < 1e9:
-        msg = f'{numel / 1e6:.3f} M'
-    else:
-        msg = f'{numel / 1e9:.3f} B'
-    print_log(f'Model is built (parameter size = {msg}).')
-
     print_log('Benchmark start.')
 
-    if use_pipeline:
-        import colossalai.nn as col_nn
-        from colossalai.engine.schedule import PipelineSchedule
-        from colossalai.utils import MultiTimer, get_dataloader
-        from colossalai.logging import get_dist_logger
-        from colossalai.trainer import Trainer, hooks
-
-        def batch_data_process_func(batch_data):
-            data = {
-                'input_ids': batch_data['input_ids'],
-                'token_type_ids': batch_data['token_type_ids'],
-                'attention_mask': batch_data['attention_mask']
-            }
-            labels = batch_data['labels']
-            return data, labels
-
-        timer = MultiTimer()
-        schedule = PipelineSchedule(num_microbatches=2, batch_data_process_func=batch_data_process_func)
-        engine = model
-        logger = get_dist_logger()
-        trainer = Trainer(engine=engine, timer=timer, logger=logger, schedule=schedule)
-
-        hook_list = [
-            hooks.LossHook(),
-            hooks.AccuracyHook(col_nn.metric.Accuracy()),
-            hooks.LogMetricByEpochHook(logger),
-            hooks.LRSchedulerHook(lr_scheduler, by_epoch=True)
-        ]
-
-        trainer.fit(train_dataloader=train_data,
-                    epochs=CONFIG['hyperparameter']['num_epochs'],
-                    test_dataloader=test_data,
-                    test_interval=1,
-                    hooks=hook_list,
-                    display_progress=True)
-
-    else:
-        for epoch in range(CONFIG['hyperparameter']['num_epochs']):
-            _train(epoch, rank, world_size, train_data, model, criterion, optimizer, lr_scheduler, scaler, mem_monitor)
-            _test(epoch, rank, world_size, test_data, model, criterion, mem_monitor)
+    for epoch in range(CONFIG['hyperparameter']['num_epochs']):
+        _train(epoch, rank, world_size, train_data, model, criterion, optimizer, lr_scheduler, scaler)
+        _test(epoch, rank, world_size, test_data, model, criterion)
 
     print_log('Benchmark complete.')
