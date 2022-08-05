@@ -9,8 +9,9 @@ from colossalai.core import global_context as gpc
 from colossalai.context import ParallelMode
 
 from common.utils import CONFIG, ModelFromHF, get_model_size
-from colossalai_utils.model_zoo.colo_bert import ColoBertMaskedLMLoss, ColoBertForMaskedLM, create_colo_bert_pipeline_model
-from pretraining.pretrain_utils import get_dataloader_for_pretraining
+from colossalai_utils.model_zoo.colo_bert import ColoBertMaskedLMLoss, ColoBertForMaskedLM
+# from pretraining.pretrain_utils import get_dataloader_for_pretraining
+from data.dataset_utils import build_train_valid_test_datasets
 
 _bert_base = dict(
     seq_length=512,
@@ -48,26 +49,30 @@ _default_hyperparameters = dict(
 
 
 def build_data(args):
-    # tokenizer = BertTokenizer.from_pretrained(args.vocab_file,
-    #                                         do_lower_case=args.do_lower_case,
-    #                                         max_len=512)
-    # logger = get_dist_logger()
-    # processor = PROCESSORS[args.task_name]()
+    logger = get_dist_logger()
+    logger.info('> building train, validation, and test datasets for BERT ...', ranks=[0])
+    train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
+        data_prefix=args.data_path,
+        data_impl=args.data_impl,
+        splits_string=args.split,
+        max_seq_length=args.seq_length,
+        masked_lm_prob=args.mask_prob,
+        short_seq_prob=args.short_seq_prob,
+        seed=args.seed,
+        skip_warmup=(not args.mmap_warmup))
+    # print_rank_0("> finished creating BERT datasets ...")
+    # dataloader = get_dataloader_for_pretraining(
+    #     root=args.data,                         # ./pretrain_data/phase1/unbinned/parquet
+    #     local_rank=gpc.get_local_rank(ParallelMode.DATA),
+    #     vocab_file=args.vocab_file,             # bert-base-uncased
+    #     global_batch_size=CONFIG['hyperparameter']['batch_size'],      # 32
+    # )
 
-    # train_data = get_train_dataloader(args, processor, logger)
-    # test_data = get_eval_dataloader(args, tokenizer, processor, logger)
-    dataloader = get_dataloader_for_pretraining(
-        root=args.data,                         # ./pretrain_data/phase1/unbinned/parquet
-        local_rank=gpc.get_local_rank(ParallelMode.DATA),
-        vocab_file=args.vocab_file,             # bert-base-uncased
-        global_batch_size=CONFIG['hyperparameter']['batch_size'],      # 32
-    )
-
-    if args.pretrained:
-        return dataloader, None
-    else:
-        # TODO : train set and test set, but I still don't know GLUE_DATASET MRPC looks like
-        ...
+    # if args.pretrained:
+    #     return dataloader, None
+    # else:
+    #     # TODO : train set and test set, but I still don't know GLUE_DATASET MRPC looks like
+    #     ...
 
 
 def build_model():
